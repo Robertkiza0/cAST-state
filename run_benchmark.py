@@ -96,6 +96,16 @@ class RepoChunkCache:
         key = (str(repo_dir), strategy)
         if key not in self._cache:
             print(f"[chunking] Début {strategy} sur {repo_dir}...")
+            # "fixed" never hangs (pure Python, no tree-sitter) — only the AST
+            # strategies go through tree-sitter, which is where a hang was
+            # traced to. Print BEFORE each file (not after, and not just every
+            # N files) for those specifically: if one file hangs, the last
+            # line printed is unambiguously that exact file, not a guess
+            # bracketed by whichever heartbeat interval happened to be set.
+            # TEMPORARY while root-causing a real stall seen on Colab but not
+            # reproduced locally (same repo) — dial back once the culprit
+            # file/pattern is identified and handled properly.
+            trace_every_file = strategy != "fixed"
             chunks = []
             n_files = 0
             for root, _, files in os.walk(repo_dir):
@@ -107,7 +117,9 @@ class RepoChunkCache:
                         except OSError:
                             continue
                         n_files += 1
-                        if n_files % 200 == 0:
+                        if trace_every_file:
+                            print(f"[chunking]   ({strategy}) fichier {n_files}: {file_path} ({len(code)} car.)")
+                        elif n_files % 200 == 0:
                             print(f"[chunking]   ({strategy}) {n_files} fichiers traités, en cours: {file_path}")
                         t0 = time.time()
                         chunks.extend(chunk_file(file_path, code, strategy, self.max_chunk_size))
