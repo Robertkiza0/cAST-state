@@ -126,17 +126,36 @@ def run_repoeval(args, chunk_cache: RepoChunkCache, generator, results: dict) ->
     for i, task in enumerate(tasks, 1):
         metadata = task["metadata"]
         repo_dir = task["repo_dir"]
+        verbose = i == 1  # instrumentation détaillée sur la toute première tâche seulement
+
+        if verbose:
+            print(f"[RepoEval] Tâche 1: dépôt={task['repo']}, début du traitement...")
 
         for strategy in STRATEGIES:
+            t0 = time.time()
             chunks = chunk_cache.get(repo_dir, strategy)
+            if verbose:
+                print(f"[RepoEval]   [{strategy}] chunking dépôt: {len(chunks)} chunks en {time.time()-t0:.1f}s")
+
+            t0 = time.time()
             safe_chunks = filter_safe_chunks_repoeval(
                 chunks, repo_dir, metadata["fpath_tuple"], metadata["context_start_lineno"]
             )
             retriever = BM25Retriever(safe_chunks)
             retrieved = retriever.retrieve(task["prompt"], k=args.k)
+            if verbose:
+                print(f"[RepoEval]   [{strategy}] retrieval: {len(retrieved)} chunks en {time.time()-t0:.1f}s")
+
+            t0 = time.time()
             prompt = build_prompt(task["prompt"], retrieved, max_context_chars=args.max_context_chars)
             prediction = generator.generate(prompt)
+            if verbose:
+                print(f"[RepoEval]   [{strategy}] generate(): {time.time()-t0:.1f}s, sortie={prediction[:60]!r}")
+
             score(metadata["ground_truth"], prediction, results["repoeval"][strategy])
+
+        if verbose:
+            print("[RepoEval] Tâche 1 terminée avec succès.")
 
         if i % 5 == 0 or i == len(tasks):
             print(f"[RepoEval] {i}/{len(tasks)} tâches traitées")
