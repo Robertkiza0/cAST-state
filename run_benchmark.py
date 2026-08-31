@@ -95,7 +95,9 @@ class RepoChunkCache:
     def get(self, repo_dir: Path, strategy: str) -> list[dict[str, Any]]:
         key = (str(repo_dir), strategy)
         if key not in self._cache:
+            print(f"[chunking] Début {strategy} sur {repo_dir}...")
             chunks = []
+            n_files = 0
             for root, _, files in os.walk(repo_dir):
                 for filename in files:
                     if filename.endswith(".py"):
@@ -104,7 +106,20 @@ class RepoChunkCache:
                             code = open(file_path, "r", encoding="utf-8").read()
                         except OSError:
                             continue
+                        n_files += 1
+                        if n_files % 200 == 0:
+                            print(f"[chunking]   ({strategy}) {n_files} fichiers traités, en cours: {file_path}")
+                        t0 = time.time()
                         chunks.extend(chunk_file(file_path, code, strategy, self.max_chunk_size))
+                        elapsed = time.time() - t0
+                        if elapsed > 2.0:
+                            # Repère un fichier pathologique pour tree-sitter (ex. ligne générée
+                            # anormalement longue) plutôt que de laisser le run entier sembler figé.
+                            longest_line = max((len(line) for line in code.splitlines()), default=0)
+                            print(
+                                f"[chunking] LENT: {file_path} ({strategy}) en {elapsed:.1f}s "
+                                f"— {len(code)} caractères, ligne la plus longue: {longest_line}"
+                            )
             self._cache[key] = chunks
         return self._cache[key]
 
