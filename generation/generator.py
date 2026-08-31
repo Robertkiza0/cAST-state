@@ -43,15 +43,31 @@ class HFGenerator:
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).to(device)
+        # Truncate from the left (drop the oldest context first) so a
+        # too-long prompt never loses the tail — the part right before the
+        # completion point, i.e. the part that matters most. Same lesson as
+        # trim_code() in run_benchmark.py, applied at the tokenizer level too.
+        self.tokenizer.truncation_side = "left"
+        # device_map="auto" (accelerate) streams weights shard-by-shard
+        # straight to their target device instead of first materializing the
+        # whole model in CPU RAM and only then moving it — for a 7B model
+        # that difference is the gap between fitting in Colab's default CPU
+        # RAM and getting silently OOM-killed (no traceback, no exit code,
+        # whatever was still buffered in stdout is lost) partway through a
+        # run. Matches the fix already used elsewhere in this project's
+        # other notebooks (repocoder-mine/generator_min.py).
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.float16,
+            device_map="auto" if device != "cpu" else {"": "cpu"},
+            low_cpu_mem_usage=True,
+        )
         self.model.eval()
-        self.device = device
         self.max_new_tokens = max_new_tokens
 
     def generate(self, prompt: str) -> str:
         import torch
 
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(self.device)
+        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(self.model.device)
         with torch.no_grad():
             output = self.model.generate(
                 **inputs,

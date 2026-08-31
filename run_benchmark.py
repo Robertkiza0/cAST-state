@@ -27,6 +27,7 @@ tableau final, pas caché.
 import argparse
 import os
 import random
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -137,7 +138,7 @@ def run_repoeval(args, chunk_cache: RepoChunkCache, generator, results: dict) ->
             prediction = generator.generate(prompt)
             score(metadata["ground_truth"], prediction, results["repoeval"][strategy])
 
-        if i % 10 == 0 or i == len(tasks):
+        if i % 5 == 0 or i == len(tasks):
             print(f"[RepoEval] {i}/{len(tasks)} tâches traitées")
 
 
@@ -164,7 +165,7 @@ def run_cceval(args, chunk_cache: RepoChunkCache, generator, results: dict) -> N
             score(metadata["ground_truth"], prediction, results["cceval"][strategy])
 
         processed += 1
-        if processed % 10 == 0:
+        if processed % 5 == 0:
             print(f"[CrossCodeEval] {processed}/{len(tasks)} tâches traitées (clonées avec succès)")
 
     print(f"[CrossCodeEval] {processed}/{len(tasks)} tâches traitées au total")
@@ -210,6 +211,14 @@ def parse_args():
 
 
 def main():
+    # Python fully buffers stdout (instead of flushing per line) whenever
+    # it isn't attached to a terminal — e.g. piped through `tee`, redirected
+    # to a file, or captured by some notebook frontends. Force line
+    # buffering so progress prints show up immediately regardless, and
+    # — more importantly — so a crash (OOM-kill, CUDA abort) doesn't
+    # silently swallow whatever was still sitting in the stdout buffer.
+    sys.stdout.reconfigure(line_buffering=True)
+
     args = parse_args()
     random.seed(args.seed)
 
