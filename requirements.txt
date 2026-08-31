@@ -1,3 +1,15 @@
 astchunk
 tree-sitter
 tree-sitter-python
+rank_bm25
+
+# Préférée pour compute_es (extension compilée, plus rapide) — repli
+# automatique sur une implémentation Levenshtein pure Python si absente
+# (voir metrics.py), ex. pas de wheel dispo pour Python 3.13/Windows ici.
+editdistance; python_version < "3.13" or platform_system != "Windows"
+
+# Optionnel, uniquement pour --generator hf (run réel StarCoder2-7B/CodeLlama-7B
+# sur une machine GPU, ex. Colab) — pas nécessaire pour --generator stub.
+# torch
+# transformers
+# accelerate

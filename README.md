@@ -1,35 +1,38 @@
-# cAST-state
+# cAST-Scope
 
-Comparaison de stratégies de chunking pour la génération de code augmentée par
-retrieval (RACG), extraite du projet `repocoder-mine`. Trois stratégies de
-découpage sur le même retriever/scoring pondéré + attention AST :
+Résout la Limitation #1 officielle du papier cAST ("Contextual Awareness") :
+enrichir la représentation des ancêtres de chaque chunk avec la portée d'état
+de la classe englobante (attributs `self.*`) et les décorateurs de la
+fonction englobante, sans dégrader la vitesse de chunking.
 
-- **`ast_chunker.py`** — fenêtres de lignes glissantes, enrichies des
-  identifiants de portée (scope-aware), pas de respect strict des frontières AST.
-- **`container_ast_chunker.py`** — découpage par conteneurs AST fait maison
-  (fonction/classe entière si possible, sinon découpe par instruction de haut
-  niveau interne avec en-tête + chevauchement conservés). Budget en lignes.
-- **`cast_pipeline.py`** — adaptateur vers [`astchunk`](https://github.com/yilinjz/astchunk),
-  l'implémentation officielle de l'algorithme **cAST** (Zhang et al., EMNLP
-  2025 Findings — [papier](https://aclanthology.org/2025.findings-emnlp.430/)) :
-  parcours récursif split-then-merge, taille mesurée en caractères
-  non-blancs, fusion gloutonne des nœuds AST frères.
+## Structure
 
-`weighted_ast_scorer.py` (Jaccard pondéré : IDF précalculé × attention
-statique AST × poids par type de symbole) et `ast_distance.py` (attention
-`exp(-λ·distance_ast)` par rapport au curseur) sont communs aux trois.
-
-## Pourquoi
-
-Le projet `repocoder-mine` a déjà confirmé (voir tests McNemar) que, sur les
-mêmes chunks, un signal de scoring plus sophistiqué (identifiants AST, IDF+type,
-attention par distance AST) ne bat pas significativement le Jaccard texte brut,
-ni sur RepoCoder ni sur CrossCodeEval. L'axe encore ouvert est celui du
-**chunking** lui-même : est-ce que découper par structure AST (au lieu de
-fenêtres de lignes fixes) améliore le retrieval/la génération ? `cast_pipeline.py`
-apporte l'implémentation *officielle* de cAST comme point de comparaison,
-plutôt qu'une réimplémentation maison — pour pouvoir citer et comparer
-directement au papier source.
+- **`astchunk_scope/`** — fork modifiable de [`astchunk`](https://github.com/yilinjz/astchunk)
+  (Zhang et al., EMNLP 2025 Findings — [papier](https://aclanthology.org/2025.findings-emnlp.430/)).
+  Seul changement de comportement : `ASTChunk.build_chunk_ancestors()` dans
+  `astchunk_scope/astchunk.py` (voir docstring de `astchunk_scope/__init__.py`
+  pour le détail, y compris le cache par appel à `chunkify()` qui garde le
+  coût amorti sous 1 ms/chunk — voir `test_astchunk_scope.py`). Nommé
+  `astchunk_scope` (pas `astchunk`) exprès : le paquet pip `astchunk` original
+  reste intact et importable en parallèle, nécessaire pour la baseline
+  `cast_orig` non modifiée.
+- **`chunkers/`** — point d'entrée unifié `chunk_file(path, code, strategy, max_chunk_size)`
+  pour les 3 baselines (`fixed`, `cast_orig`, `cast_scope`), même format de
+  sortie quelle que soit la stratégie.
+- **`retrieval/`** — `BM25Retriever`, partagé par les 3 baselines (seul le
+  chunking varie entre les conditions).
+- **`generation/`** — générateur enfichable : `HFGenerator` (vrai modèle
+  HuggingFace, StarCoder2-7B/CodeLlama-7B — nécessite torch+GPU, à lancer sur
+  Colab) ou `StubGenerator` (factice, déterministe, pour valider tout le
+  pipeline sans GPU).
+- **`metrics.py`** — EM, ES (Levenshtein, avec repli pur Python si le paquet
+  compilé `editdistance` n'est pas installable), Pass@1 (voir limitation
+  ci-dessous).
+- **`datasets_io.py`** / **`crosscodeeval_adapter.py`** — chargement des
+  tâches RepoEval (dépôts déjà clonés localement) et CrossCodeEval (tâches
+  vendorisées localement, vrais dépôts clonés à la demande).
+- **`run_benchmark.py`** — orchestre tout : compare les 3 baselines sur
+  RepoEval et/ou CrossCodeEval avec le même retriever et le même générateur.
 
 ## Installation
 
@@ -37,30 +40,55 @@ directement au papier source.
 pip install -r requirements.txt
 ```
 
-## Tests rapides (unitaires, sans données réelles)
+## Tests (rapides, aucune donnée réelle nécessaire)
 
 ```bash
-python -m unittest test_container_ast_chunker test_ast_distance test_weighted_ast_scorer
+python -m unittest discover -p "test_*.py"
 ```
 
-## Comparaison sur données réelles (50 tâches RepoCoder, 5 dépôts)
+39 tests couvrent : l'annotation scope-aware (état de classe, décorateurs,
+non-régression, performance amortie < 1 ms/chunk), le chunker fixe, le
+retriever BM25, les métriques, et la cohérence de l'interface unifiée entre
+les 3 stratégies (`cast_orig`/`cast_scope` doivent avoir le MÊME fenêtrage,
+seul le texte d'en-tête diffère).
 
-Nécessite `data/repos_source/` (dépôts clonés) et
-`datasets rapo/line_level_completion_1k_context_codegen.test.jsonl` — non
-versionnés ici (voir `.gitignore`), à récupérer depuis `repocoder-mine` ou à
-retélécharger depuis [microsoft/CodeT](https://github.com/microsoft/CodeT).
+## Lancer le benchmark
+
+Test rapide, sans GPU, générateur factice (valide tout le pipeline —
+chunking, retrieval, prompt, scoring, tableau comparatif — sans télécharger
+de modèle) :
 
 ```bash
-python test_weighted_ast_retrieval.py       # fenêtres glissantes
-python test_container_weighted_retrieval.py # conteneurs AST maison
-python test_cast_weighted_retrieval.py      # vrai cAST (astchunk)
+python run_benchmark.py --dataset repoeval --n-tasks 10 --generator stub
+python run_benchmark.py --dataset cceval --n-tasks 10 --generator stub
 ```
 
-## À faire
+Run réel (sur une machine GPU, ex. Colab — voir `repocoder-mine/colab_*.ipynb`
+pour le modèle d'environnement déjà utilisé dans ce projet) :
 
-- Notebook Colab autonome (télécharge les dépôts RepoCoder lui-même) avec les
-  3 conditions + test de significativité McNemar apparié, sur le modèle de
-  `colab_container_ast_retrieval.ipynb` dans `repocoder-mine`.
-- Décider si cAST est comparé seul contre les deux autres, ou si les 3 sont
-  croisées avec les variantes de scoring (brut / IDF+type / +attention) déjà
-  testées dans `repocoder-mine`.
+```bash
+python run_benchmark.py --dataset both --n-tasks 300 --generator hf \
+    --model-name bigcode/starcoder2-7b --device cuda
+```
+
+Toutes les options : `python run_benchmark.py --help`.
+
+## Limitation connue : Pass@1
+
+RepoEval et CrossCodeEval ne sont vendorisés ici que dans leur variante
+*line-level completion*, sans harnais d'exécution (pas de tests unitaires à
+exécuter contre la complétion générée). `compute_pass_at_1()` est donc, pour
+ces deux datasets, numériquement identique à Exact Match — ce n'est PAS
+l'équivalent du vrai Pass@1 basé sur exécution que le papier cAST rapporte
+sur SWE-bench. `run_benchmark.py` l'affiche quand même (demandé dans la
+spec), avec cette note en clair dans le tableau final.
+
+## Données locales (non versionnées, voir `.gitignore`)
+
+- `data/repos_source/` — 8 dépôts RepoEval déjà clonés.
+- `datasets rapo/` — tâches RepoEval (jsonl).
+- `crosscodeeval_data/python/` — tâches CrossCodeEval (jsonl) + carte des
+  licences ; les vrais dépôts sont clonés à la demande dans `cceval_repos/`
+  (créé automatiquement par `run_benchmark.py --dataset cceval`).
+- `astchunk_reference/`, `cceval/` — clones de référence en lecture seule
+  (code tiers, pas notre travail).

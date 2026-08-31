@@ -7,6 +7,7 @@ __pycache__/
 data/
 datasets rapo/
 crosscodeeval_data/
+cceval_repos/
 
 # Clones de référence en lecture seule (code tiers public, pas notre travail) —
 # gardés sur disque pour lecture/dépendance, pas commités dans ce dépôt.
