@@ -263,7 +263,12 @@ def main():
     # buffering so progress prints show up immediately regardless, and
     # — more importantly — so a crash (OOM-kill, CUDA abort) doesn't
     # silently swallow whatever was still sitting in the stdout buffer.
-    sys.stdout.reconfigure(line_buffering=True)
+    # Guarded: under IPython's %run, sys.stdout is an OutStream wrapper
+    # without .reconfigure() (it's already line-flushed by IPython itself).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except AttributeError:
+        pass
 
     args = parse_args()
     random.seed(args.seed)
@@ -281,10 +286,28 @@ def main():
     results = {dataset: {strategy: new_result_bucket() for strategy in STRATEGIES} for dataset in datasets_run}
 
     start = time.time()
-    if "repoeval" in datasets_run:
-        run_repoeval(args, chunk_cache, generator, results)
-    if "cceval" in datasets_run:
-        run_cceval(args, chunk_cache, generator, results)
+    try:
+        if "repoeval" in datasets_run:
+            run_repoeval(args, chunk_cache, generator, results)
+        if "cceval" in datasets_run:
+            run_cceval(args, chunk_cache, generator, results)
+    finally:
+        # Under `!python`, the OS reclaims all of this when the subprocess
+        # exits. Under IPython's `%run` (same long-lived kernel process —
+        # needed on Colab, see the notebook note above `%run`), it doesn't:
+        # an HFGenerator's model would stay resident in VRAM/RAM after this
+        # call returns, and the next %run'd model load would stack on top of
+        # it instead of starting from a clean slate. `finally` so this still
+        # runs even if the benchmark loop raises.
+        if hasattr(generator, "model"):
+            del generator.model
+            import gc
+            gc.collect()
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except ImportError:
+                pass
 
     print_comparison_table(results, datasets_run)
     print(f"\nTemps total: {time.time() - start:.1f}s")
