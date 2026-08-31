@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+
+# Données locales volumineuses (dépôts source, tâches RepoCoder, cache de chunks) —
+# reproductibles via le notebook Colab (télécharge microsoft/CodeT à la volée),
+# pas versionnées ici.
+data/
+datasets rapo/
+
+# Clone de référence en lecture seule (le vrai code est sur PyPI: pip install astchunk,
+# et sur https://github.com/yilinjz/astchunk) — gardé sur disque pour lecture, pas commité.
+astchunk_reference/
+
+.env
