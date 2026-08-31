@@ -1,14 +1,18 @@
 __pycache__/
 *.pyc
 
-# Données locales volumineuses (dépôts source, tâches RepoCoder, cache de chunks) —
-# reproductibles via le notebook Colab (télécharge microsoft/CodeT à la volée),
+# Données locales volumineuses (dépôts source, tâches RepoCoder/CCEval, cache de chunks) —
+# reproductibles via les notebooks Colab (téléchargent leurs sources à la volée),
 # pas versionnées ici.
 data/
 datasets rapo/
+crosscodeeval_data/
 
-# Clone de référence en lecture seule (le vrai code est sur PyPI: pip install astchunk,
-# et sur https://github.com/yilinjz/astchunk) — gardé sur disque pour lecture, pas commité.
+# Clones de référence en lecture seule (code tiers public, pas notre travail) —
+# gardés sur disque pour lecture/dépendance, pas commités dans ce dépôt.
+# astchunk: https://github.com/yilinjz/astchunk (aussi sur PyPI: pip install astchunk)
+# cceval: https://github.com/amazon-science/cceval (harnais officiel CrossCodeEval)
 astchunk_reference/
+cceval/
 
 .env
