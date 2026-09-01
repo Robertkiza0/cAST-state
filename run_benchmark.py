@@ -338,9 +338,10 @@ def parse_args():
     parser.add_argument("--max-chunk-size", type=int, default=2000, help="Caractères non-blancs (identique aux 3 baselines)")
     parser.add_argument("--k", type=int, default=5, help="Nombre de chunks retrouvés par tâche")
     parser.add_argument("--max-context-chars", type=int, default=3000)
-    parser.add_argument("--generator", choices=["stub", "hf"], default="stub")
-    parser.add_argument("--model-name", default=None, help="Requis si --generator hf, ex: bigcode/starcoder2-7b")
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--generator", choices=["stub", "hf", "hf_api"], default="stub")
+    parser.add_argument("--model-name", default=None, help="Requis si --generator hf/hf_api, ex: bigcode/starcoder2-7b")
+    parser.add_argument("--device", default="cuda", help="--generator hf uniquement (ignoré par hf_api, aucun GPU local)")
+    parser.add_argument("--hf-token", default=None, help="--generator hf_api uniquement ; sinon lu depuis la variable d'env HF_TOKEN")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cceval-repo-cache", default="cceval_repos")
     parser.add_argument("--results-dir", default="results", help="Résultats sauvegardés au fur et à mesure (JSONL), pas seulement à la fin")
@@ -370,7 +371,7 @@ def main():
             "(validation du pipeline uniquement, pas un vrai run pour le papier)."
         )
 
-    generator = get_generator(args.generator, model_name=args.model_name, device=args.device)
+    generator = get_generator(args.generator, model_name=args.model_name, device=args.device, hf_token=args.hf_token)
     chunk_cache = RepoChunkCache(max_chunk_size=args.max_chunk_size)
 
     datasets_run = ["repoeval", "cceval"] if args.dataset == "both" else [args.dataset]

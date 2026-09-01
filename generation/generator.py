@@ -1,11 +1,22 @@
 """Pluggable generator backends for run_benchmark.py.
 
-- HFGenerator: real local HuggingFace generation (e.g. StarCoder2-7B,
+- HFGenerator: real LOCAL HuggingFace generation (e.g. StarCoder2-7B,
   CodeLlama-7B-Python). Needs torch + transformers +, for a 7B model in
-  practice, a GPU with >=16GB VRAM. NOT runnable on this development machine
-  (no torch installed here, checked before writing this file) — meant for
-  the Colab/GPU environment this project's other notebooks already use
-  (repocoder-mine/colab_*.ipynb).
+  practice, a GPU with >=16GB VRAM — this is the backend that repeatedly hit
+  Colab GPU/kernel instability during development (crashes, kernel restart
+  loops, unrelated to this project's own code — see cast_scope_paper's
+  commit history). NOT runnable on this development machine at all (no torch
+  installed here).
+- HFInferenceGenerator: real REMOTE generation via the Hugging Face
+  Inference API (huggingface_hub.InferenceClient) — no local model load, no
+  GPU, no CUDA, no torch even needed. Trades local control (own batching,
+  guaranteed availability) for sidestepping local GPU instability entirely;
+  needs network access and, in practice, an HF_TOKEN (see
+  colab_inference_api.ipynb) for rate limits and for any model that isn't
+  freely served. Not every model is available on HF's free serverless
+  Inference API — if a 404/501 comes back, that specific model isn't hosted
+  there and needs a real GPU backend (HFGenerator) or a paid Inference
+  Endpoint instead.
 - StubGenerator: deterministic, instant, no model download. Used by
   run_benchmark.py --generator stub (the default, and what --dry-run
   implies) to validate the whole pipeline — chunking, retrieval, prompt
@@ -88,11 +99,58 @@ class HFGenerator:
         return self.tokenizer.decode(output[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
 
 
-def get_generator(name: str, model_name: str | None = None, device: str = "cuda") -> Generator:
+class HFInferenceGenerator:
+    """Real generation via the Hugging Face Inference API — no local model
+    weights, no GPU, no CUDA. `text_generation()` is the same call TGI
+    (text-generation-inference, what powers HF's own Inference Widgets)
+    exposes remotely; `stop` there is the API's own native stop-sequence
+    support (server-side, not a local generate() kwarg like HFGenerator's
+    stop_strings, but the same purpose)."""
+
+    def __init__(self, model_name: str, max_new_tokens: int = 64, token: str | None = None):
+        import os
+
+        from huggingface_hub import InferenceClient
+
+        self.model_name = model_name
+        self.max_new_tokens = max_new_tokens
+        # provider="hf-inference" pins the request to HF's own serverless
+        # Inference API specifically. Newer huggingface_hub versions route
+        # through a multi-provider system (Together, Fireworks, ...) and,
+        # left to auto-select, raise a bare StopIteration for a model with
+        # no configured provider — an unhelpful error for a model that may
+        # well be servable, just not through that auto-routing.
+        self.client = InferenceClient(
+            model=model_name, token=token or os.environ.get("HF_TOKEN"), provider="hf-inference",
+        )
+
+    def generate(self, prompt: str, stop_sequences: list[str] | None = None) -> str:
+        try:
+            return self.client.text_generation(
+                prompt,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                stop=stop_sequences or [],
+            )
+        except Exception as error:  # noqa: BLE001 - réseau/modèle non hébergé, on veut le voir clairement
+            raise RuntimeError(
+                f"Échec de l'appel à l'API d'inférence HF pour {self.model_name!r}: {error}. "
+                "Le modèle n'est peut-être pas disponible sur l'API serverless gratuite "
+                "(essayez --generator hf sur une machine GPU, ou un Inference Endpoint payant)."
+            ) from error
+
+
+def get_generator(
+    name: str, model_name: str | None = None, device: str = "cuda", hf_token: str | None = None,
+) -> Generator:
     if name == "stub":
         return StubGenerator()
     if name == "hf":
         if not model_name:
             raise ValueError("--model-name is required for --generator hf")
         return HFGenerator(model_name, device=device)
-    raise ValueError(f"Unknown generator backend {name!r}, expected 'stub' or 'hf'")
+    if name == "hf_api":
+        if not model_name:
+            raise ValueError("--model-name is required for --generator hf_api")
+        return HFInferenceGenerator(model_name, token=hf_token)
+    raise ValueError(f"Unknown generator backend {name!r}, expected 'stub', 'hf', or 'hf_api'")
