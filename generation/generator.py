@@ -2,11 +2,11 @@
 
 - HFGenerator: real LOCAL HuggingFace generation (e.g. StarCoder2-7B,
   CodeLlama-7B-Python). Needs torch + transformers +, for a 7B model in
-  practice, a GPU with >=16GB VRAM — this is the backend that repeatedly hit
-  Colab GPU/kernel instability during development (crashes, kernel restart
-  loops, unrelated to this project's own code — see cast_scope_paper's
-  commit history). NOT runnable on this development machine at all (no torch
-  installed here).
+  practice, a GPU with >=16GB VRAM — this is the backend used while
+  root-causing a long Colab kernel-crash saga that turned out to be an
+  unrelated tree-sitter version issue (see requirements.txt), not anything
+  GPU/CUDA-specific. NOT runnable on this development machine at all (no
+  torch installed here).
 - HFInferenceGenerator: real REMOTE generation via the Hugging Face
   Inference API (huggingface_hub.InferenceClient) — no local model load, no
   GPU, no CUDA, no torch even needed. Trades local control (own batching,
