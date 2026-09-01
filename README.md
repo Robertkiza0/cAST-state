@@ -5,6 +5,15 @@ enrichir la représentation des ancêtres de chaque chunk avec la portée d'éta
 de la classe englobante (attributs `self.*`) et les décorateurs de la
 fonction englobante, sans dégrader la vitesse de chunking.
 
+## Questions de recherche (RQ1–RQ4)
+
+| RQ | Question | Où |
+|---|---|---|
+| **RQ1** | L'enrichissement des ancêtres AST (`self.*`, décorateurs) améliore-t-il la complétude structurelle par rapport aux métadonnées cAST standard ? | `astchunk_scope/`, `test_astchunk_scope.py` |
+| **RQ2** | Comment cAST-Scope se compare-t-il au chunking line-based et à cAST baseline en EM/ES/Pass@1 ? | `run_benchmark.py`, `colab_*.ipynb` |
+| **RQ3** | Le mécanisme d'expansion de portée reste-t-il stable face à du code incomplet/erroné près du curseur ? | `test_rq3_robustness.py`, `experiments/rq3_robustness_report.py` |
+| **RQ4** | Quel est le surcoût en latence et en tokens introduit par cAST-Scope ? | `experiments/rq4_overhead_latency.py` |
+
 ## Structure
 
 - **`astchunk_scope/`** — fork modifiable de [`astchunk`](https://github.com/yilinjz/astchunk)
@@ -32,7 +41,15 @@ fonction englobante, sans dégrader la vitesse de chunking.
   tâches RepoEval (dépôts déjà clonés localement) et CrossCodeEval (tâches
   vendorisées localement, vrais dépôts clonés à la demande).
 - **`run_benchmark.py`** — orchestre tout : compare les 3 baselines sur
-  RepoEval et/ou CrossCodeEval avec le même retriever et le même générateur.
+  RepoEval et/ou CrossCodeEval avec le même retriever et le même générateur (RQ2).
+- **`experiments/rq3_robustness_report.py`** — RQ3 : troncature de vrais
+  fichiers à plusieurs points (25/50/75/90%, simule un curseur en cours de
+  frappe), mesure le taux de crash cast_orig vs cast_scope et la capacité
+  à extraire l'état de classe malgré la troncature. Complété par les tests
+  synthétiques déterministes de `test_rq3_robustness.py`.
+- **`experiments/rq4_overhead_latency.py`** — RQ4 : latence de chunking et
+  surcoût en caractères de l'en-tête `chunk_expansion`, cast_orig vs
+  cast_scope, sur tout le corpus local.
 
 ## Installation
 
@@ -46,11 +63,19 @@ pip install -r requirements.txt
 python -m unittest discover -p "test_*.py"
 ```
 
-39 tests couvrent : l'annotation scope-aware (état de classe, décorateurs,
+48 tests couvrent : l'annotation scope-aware (état de classe, décorateurs,
 non-régression, performance amortie < 1 ms/chunk), le chunker fixe, le
-retriever BM25, les métriques, et la cohérence de l'interface unifiée entre
+retriever BM25, les métriques, la cohérence de l'interface unifiée entre
 les 3 stratégies (`cast_orig`/`cast_scope` doivent avoir le MÊME fenêtrage,
-seul le texte d'en-tête diffère).
+seul le texte d'en-tête diffère), et la robustesse face au code
+incomplet/erroné (RQ3).
+
+## Lancer les expériences RQ3/RQ4 (locales, pas besoin de GPU)
+
+```bash
+python experiments/rq3_robustness_report.py --n-files 30
+python experiments/rq4_overhead_latency.py
+```
 
 ## Lancer le benchmark
 
