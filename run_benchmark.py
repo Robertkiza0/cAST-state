@@ -25,10 +25,12 @@ tableau final, pas caché.
 """
 
 import argparse
+import json
 import os
 import random
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -140,13 +142,48 @@ def new_result_bucket() -> dict[str, list]:
     return {"em": [], "es": [], "pass1": []}
 
 
-def score(target: str, prediction: str, bucket: dict[str, list]) -> None:
-    bucket["em"].append(compute_em(target, prediction))
-    bucket["es"].append(compute_es(target, prediction))
-    bucket["pass1"].append(compute_pass_at_1(target, prediction))
+class ResultsWriter:
+    """Écrit chaque résultat (tâche x stratégie) sur disque au fur et à
+    mesure, une ligne JSON à la fois, flush immédiat après chaque écriture.
+
+    Nécessaire parce que ce run peut planter en cours de route (kernel Colab
+    instable, coupure réseau CCEval, etc.) — sans ça, un crash à la tâche 250
+    sur 300 perdrait TOUT, y compris les 249 déjà scorées. Avec ça, les
+    résultats déjà écrits survivent même si le process meurt juste après.
+    """
+
+    def __init__(self, results_dir: Path):
+        results_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.path = results_dir / f"run_{timestamp}.jsonl"
+        self._file = self.path.open("a", encoding="utf-8")
+
+    def write(self, dataset: str, task_id: str, strategy: str, em: int, es: float, pass1: int, prediction: str) -> None:
+        record = {
+            "dataset": dataset, "task_id": task_id, "strategy": strategy,
+            "em": em, "es": es, "pass1": pass1, "prediction": prediction,
+        }
+        self._file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._file.flush()
+
+    def close(self) -> None:
+        self._file.close()
 
 
-def run_repoeval(args, chunk_cache: RepoChunkCache, generator, results: dict) -> None:
+def score(
+    target: str, prediction: str, bucket: dict[str, list],
+    writer: ResultsWriter, dataset: str, task_id: str, strategy: str,
+) -> None:
+    em = compute_em(target, prediction)
+    es = compute_es(target, prediction)
+    pass1 = compute_pass_at_1(target, prediction)
+    bucket["em"].append(em)
+    bucket["es"].append(es)
+    bucket["pass1"].append(pass1)
+    writer.write(dataset, task_id, strategy, em, es, pass1, prediction)
+
+
+def run_repoeval(args, chunk_cache: RepoChunkCache, generator, results: dict, writer: ResultsWriter) -> None:
     tasks = load_repoeval_tasks(n_tasks=args.n_tasks, tasks_per_repo=args.tasks_per_repo)
     print(f"[RepoEval] {len(tasks)} tâches chargées ({len(set(t['repo'] for t in tasks))} dépôts)")
 
@@ -179,7 +216,10 @@ def run_repoeval(args, chunk_cache: RepoChunkCache, generator, results: dict) ->
             if verbose:
                 print(f"[RepoEval]   [{strategy}] generate(): {time.time()-t0:.1f}s, sortie={prediction[:60]!r}")
 
-            score(metadata["ground_truth"], prediction, results["repoeval"][strategy])
+            score(
+                metadata["ground_truth"], prediction, results["repoeval"][strategy],
+                writer, "repoeval", metadata["task_id"], strategy,
+            )
 
         if verbose:
             print("[RepoEval] Tâche 1 terminée avec succès.")
@@ -188,7 +228,7 @@ def run_repoeval(args, chunk_cache: RepoChunkCache, generator, results: dict) ->
             print(f"[RepoEval] {i}/{len(tasks)} tâches traitées")
 
 
-def run_cceval(args, chunk_cache: RepoChunkCache, generator, results: dict) -> None:
+def run_cceval(args, chunk_cache: RepoChunkCache, generator, results: dict, writer: ResultsWriter) -> None:
     tasks = load_cceval_tasks_sample(n_tasks=args.n_tasks, seed=args.seed)
     print(f"[CrossCodeEval] {len(tasks)} tâches normalisées échantillonnées")
     cache_dir = PROJECT_DIR / args.cceval_repo_cache
@@ -208,7 +248,10 @@ def run_cceval(args, chunk_cache: RepoChunkCache, generator, results: dict) -> N
             prompt = build_prompt(task["prompt"], retrieved, max_context_chars=args.max_context_chars)
             raw_prediction = generator.generate(prompt)
             prediction = postprocess_completion(task["prompt"], raw_prediction)
-            score(metadata["ground_truth"], prediction, results["cceval"][strategy])
+            score(
+                metadata["ground_truth"], prediction, results["cceval"][strategy],
+                writer, "cceval", metadata["task_id"], strategy,
+            )
 
         processed += 1
         if processed % 5 == 0:
@@ -217,27 +260,34 @@ def run_cceval(args, chunk_cache: RepoChunkCache, generator, results: dict) -> N
     print(f"[CrossCodeEval] {processed}/{len(tasks)} tâches traitées au total")
 
 
-def print_comparison_table(results: dict, datasets_run: list[str]) -> None:
+def print_comparison_table(results: dict, datasets_run: list[str], summary_path: Path) -> None:
     def mean(values: list) -> float:
         return sum(values) / len(values) if values else float("nan")
+
+    summary: dict[str, Any] = {}
 
     print("\n" + "=" * 78)
     print("RÉSULTATS")
     print("=" * 78)
     for dataset in datasets_run:
-        print(f"\n{dataset.upper()}  (n={len(results[dataset][STRATEGIES[0]]['em'])} tâches scorées)")
+        n_scored = len(results[dataset][STRATEGIES[0]]["em"])
+        print(f"\n{dataset.upper()}  (n={n_scored} tâches scorées)")
         print(f"{'Baseline':<12} {'EM':>8} {'ES':>8} {'Pass@1':>8}")
         print("-" * 40)
+        summary[dataset] = {"n_scored": n_scored, "strategies": {}}
         for strategy in STRATEGIES:
             bucket = results[dataset][strategy]
-            print(
-                f"{strategy:<12} {mean(bucket['em']):>8.3f} {mean(bucket['es']):>8.3f} {mean(bucket['pass1']):>8.3f}"
-            )
+            em_mean, es_mean, pass1_mean = mean(bucket["em"]), mean(bucket["es"]), mean(bucket["pass1"])
+            print(f"{strategy:<12} {em_mean:>8.3f} {es_mean:>8.3f} {pass1_mean:>8.3f}")
+            summary[dataset]["strategies"][strategy] = {"em": em_mean, "es": es_mean, "pass1": pass1_mean}
     print(
         "\nNote: Pass@1 == EM ici (pas de harnais d'exécution sur ces variantes "
         "line-level — voir metrics.py:compute_pass_at_1)."
     )
     print("=" * 78)
+
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"\nRésumé sauvegardé: {summary_path}")
 
 
 def parse_args():
@@ -253,6 +303,7 @@ def parse_args():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cceval-repo-cache", default="cceval_repos")
+    parser.add_argument("--results-dir", default="results", help="Résultats sauvegardés au fur et à mesure (JSONL), pas seulement à la fin")
     return parser.parse_args()
 
 
@@ -285,13 +336,17 @@ def main():
     datasets_run = ["repoeval", "cceval"] if args.dataset == "both" else [args.dataset]
     results = {dataset: {strategy: new_result_bucket() for strategy in STRATEGIES} for dataset in datasets_run}
 
+    writer = ResultsWriter(PROJECT_DIR / args.results_dir)
+    print(f"Résultats sauvegardés au fur et à mesure dans: {writer.path}")
+
     start = time.time()
     try:
         if "repoeval" in datasets_run:
-            run_repoeval(args, chunk_cache, generator, results)
+            run_repoeval(args, chunk_cache, generator, results, writer)
         if "cceval" in datasets_run:
-            run_cceval(args, chunk_cache, generator, results)
+            run_cceval(args, chunk_cache, generator, results, writer)
     finally:
+        writer.close()
         # Under `!python`, the OS reclaims all of this when the subprocess
         # exits. Under IPython's `%run` (same long-lived kernel process —
         # needed on Colab, see the notebook note above `%run`), it doesn't:
@@ -309,7 +364,8 @@ def main():
             except ImportError:
                 pass
 
-    print_comparison_table(results, datasets_run)
+    summary_path = writer.path.with_name(writer.path.stem + "_summary.json")
+    print_comparison_table(results, datasets_run, summary_path)
     print(f"\nTemps total: {time.time() - start:.1f}s")
 
 

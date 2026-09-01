@@ -63,15 +63,26 @@ python run_benchmark.py --dataset repoeval --n-tasks 10 --generator stub
 python run_benchmark.py --dataset cceval --n-tasks 10 --generator stub
 ```
 
-Run réel (sur une machine GPU, ex. Colab — voir `repocoder-mine/colab_*.ipynb`
-pour le modèle d'environnement déjà utilisé dans ce projet) :
+Run réel (sur une machine GPU) :
 
 ```bash
 python run_benchmark.py --dataset both --n-tasks 300 --generator hf \
     --model-name bigcode/starcoder2-7b --device cuda
 ```
 
+Sur Colab, deux notebooks prêts à l'emploi (clonent ce dépôt eux-mêmes) :
+- `colab_quick_test.ipynb` — T4, 50 tâches RepoEval, un seul modèle (test rapide, économe en unités de calcul)
+- `colab_benchmark.ipynb` — A100, 300 tâches, RepoEval+CrossCodeEval, StarCoder2+CodeLlama (run complet)
+
 Toutes les options : `python run_benchmark.py --help`.
+
+### Résultats
+
+Sauvegardés au fur et à mesure dans `results/` (pas seulement à la fin) :
+un `.jsonl` avec le détail par tâche/stratégie (écrit ligne par ligne, flush
+immédiat — survit à un plantage en cours de route) et un `_summary.json`
+avec les moyennes agrégées, écrit une fois le run terminé. Le chemin exact
+est affiché au tout début de chaque run.
 
 ## Limitation connue : Pass@1
 

@@ -9,6 +9,10 @@ datasets rapo/
 crosscodeeval_data/
 cceval_repos/
 
+# Sorties de run_benchmark.py (résultats par tâche + résumés agrégés) —
+# générées à l'exécution, pas du code.
+results/
+
 # Clones de référence en lecture seule (code tiers public, pas notre travail) —
 # gardés sur disque pour lecture/dépendance, pas commités dans ce dépôt.
 # astchunk: https://github.com/yilinjz/astchunk (aussi sur PyPI: pip install astchunk)
