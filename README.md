@@ -47,9 +47,10 @@ fonction englobante, sans dégrader la vitesse de chunking.
   frappe), mesure le taux de crash cast_orig vs cast_scope et la capacité
   à extraire l'état de classe malgré la troncature. Complété par les tests
   synthétiques déterministes de `test_rq3_robustness.py`.
-- **`experiments/rq4_overhead_latency.py`** — RQ4 : latence de chunking et
-  surcoût en caractères de l'en-tête `chunk_expansion`, cast_orig vs
-  cast_scope, sur tout le corpus local.
+- **`experiments/rq4_overhead_latency.py`** — RQ4 : latence de chunking,
+  surcoût en caractères de l'en-tête `chunk_expansion`, ET surcoût de la
+  construction de prompt elle-même (vrai retrieval BM25 + vrai tokenizer
+  StarCoder2, sur de vraies tâches RepoEval) — cast_orig vs cast_scope.
 
 ## Installation
 

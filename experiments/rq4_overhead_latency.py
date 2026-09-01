@@ -1,10 +1,10 @@
 """RQ4 (Overhead & Latency): What is the computational latency and token
-overhead introduced by cAST-Scope during the chunking process and prompt
+overhead introduced by cAST-Scope during the chunking process AND prompt
 construction, compared to the baseline cAST (cast_orig)?
 
-Two things are measured, per repo, cast_orig vs cast_scope:
+Three things are measured, cast_orig vs cast_scope:
 
-1. Chunking latency: wall-clock time to chunk every .py file in the repo.
+1. Chunking latency: wall-clock time to chunk every .py file in each repo.
    cast_orig and cast_scope share the exact same windowing (see
    test_chunkers.py:test_cast_orig_and_cast_scope_have_identical_windowing)
    — the only code that differs between them is build_chunk_ancestors()
@@ -12,18 +12,26 @@ Two things are measured, per repo, cast_orig vs cast_scope:
    therefore attributable ONLY to that extra work, not to different chunk
    boundaries or a different underlying parse.
 
-2. Token/char overhead: cast_scope's chunk_expansion header
+2. Chunk header overhead: cast_scope's chunk_expansion header
    ("class Foo: (State: self.x, self.y)") is longer than cast_orig's plain
-   one ("class Foo:"). This directly matters downstream — run_benchmark.py
-   packs retrieved chunks into a fixed --max-context-chars budget, so a
-   longer header per chunk means fewer whole chunks fit. Measured as extra
-   characters in the chunk_expansion header, per chunk that has at least
-   one class/function ancestor annotated (chunks with no ancestors, e.g.
-   top-level module code, are identical between strategies and excluded).
+   one ("class Foo:"). Measured as extra characters in the header, per
+   chunk that has at least one class/function ancestor annotated.
+
+3. Prompt construction overhead: on real RepoEval tasks, the ACTUAL final
+   prompt run_benchmark.py would send to the generator (same retrieval —
+   BM25Retriever — same run_benchmark.build_prompt, same
+   --max-context-chars budget), measured in characters AND in real
+   StarCoder2 tokens (transformers can load just the tokenizer, no GPU/
+   torch needed). This is what (2) actually costs downstream: a longer
+   per-chunk header means fewer whole chunks fit in a fixed prompt budget,
+   or a larger total prompt if the budget instead grows to compensate —
+   either way it's a real cost worth reporting, not just a per-chunk
+   statistic.
 
 Usage:
     python experiments/rq4_overhead_latency.py
     python experiments/rq4_overhead_latency.py --repos-dir data/repos_source --max-chunk-size 2000
+    python experiments/rq4_overhead_latency.py --skip-prompt-overhead  # only (1)+(2), no tokenizer download
 """
 
 import argparse
@@ -101,10 +109,69 @@ def measure_repo(repo_dir: Path, strategy: str, max_chunk_size: int) -> dict[str
     }
 
 
+def measure_prompt_overhead(
+    n_tasks: int, tasks_per_repo: int, k: int, max_chunk_size: int, max_context_chars: int,
+    tokenizer_name: str | None,
+) -> dict[str, Any]:
+    """Construit le VRAI prompt (même retrieval, même budget) que
+    run_benchmark.py enverrait au générateur, pour un échantillon de
+    tâches RepoEval réelles, avec les deux stratégies — mesure la taille
+    résultante en caractères et, si possible, en vrais tokens StarCoder2."""
+    from chunkers import STRATEGIES as ALL_STRATEGIES  # noqa: F401 (documente l'ordre attendu)
+    from datasets_io import load_repoeval_tasks
+    from retrieval import BM25Retriever
+    from run_benchmark import RepoChunkCache, build_prompt, filter_safe_chunks_repoeval
+
+    tokenizer = None
+    if tokenizer_name:
+        try:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        except Exception as error:  # noqa: BLE001 - pas de réseau, pas grave, on retombe sur les caractères
+            print(f"(tokenizer {tokenizer_name} indisponible ({error}) — mesure en caractères seulement)")
+
+    tasks = load_repoeval_tasks(n_tasks=n_tasks, tasks_per_repo=tasks_per_repo)
+    chunk_cache = RepoChunkCache(max_chunk_size=max_chunk_size)
+
+    results: dict[str, Any] = {}
+    for strategy in ("cast_orig", "cast_scope"):
+        prompt_chars: list[int] = []
+        prompt_tokens: list[int] = []
+        n_chunks_retrieved: list[int] = []
+        for task in tasks:
+            metadata = task["metadata"]
+            repo_dir = task["repo_dir"]
+            chunks = chunk_cache.get(repo_dir, strategy)
+            safe_chunks = filter_safe_chunks_repoeval(
+                chunks, repo_dir, metadata["fpath_tuple"], metadata["context_start_lineno"]
+            )
+            retriever = BM25Retriever(safe_chunks)
+            retrieved = retriever.retrieve(task["prompt"], k=k)
+            prompt = build_prompt(task["prompt"], retrieved, max_context_chars=max_context_chars)
+            prompt_chars.append(len(prompt))
+            n_chunks_retrieved.append(len(retrieved))
+            if tokenizer is not None:
+                prompt_tokens.append(len(tokenizer(prompt)["input_ids"]))
+
+        results[strategy] = {
+            "n_tasks": len(tasks),
+            "avg_prompt_chars": round(sum(prompt_chars) / len(prompt_chars), 1) if prompt_chars else 0.0,
+            "avg_chunks_retrieved": round(sum(n_chunks_retrieved) / len(n_chunks_retrieved), 2) if n_chunks_retrieved else 0.0,
+            "avg_prompt_tokens": round(sum(prompt_tokens) / len(prompt_tokens), 1) if prompt_tokens else None,
+        }
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repos-dir", default=str(PROJECT_DIR / "data" / "repos_source"))
     parser.add_argument("--max-chunk-size", type=int, default=2000)
+    parser.add_argument("--k", type=int, default=5, help="Chunks retrouvés par tâche, pour la mesure de prompt")
+    parser.add_argument("--max-context-chars", type=int, default=3000)
+    parser.add_argument("--n-tasks", type=int, default=50, help="Tâches RepoEval échantillonnées pour la mesure de prompt")
+    parser.add_argument("--tasks-per-repo", type=int, default=10)
+    parser.add_argument("--tokenizer", default="bigcode/starcoder2-7b", help="Tokenizer HF pour le vrai comptage de tokens (pas besoin de torch/GPU)")
+    parser.add_argument("--skip-prompt-overhead", action="store_true", help="Ne mesurer que le chunking (1+2), pas la construction de prompt (3)")
     parser.add_argument("--results-dir", default=str(PROJECT_DIR / "results"))
     args = parser.parse_args()
 
@@ -147,6 +214,22 @@ def main():
             f"overhead en-tête moyen: {avg_overhead:>5.1f} car./chunk"
         )
     print("=" * 70)
+
+    if not args.skip_prompt_overhead:
+        print("\n--- Construction de prompt (vraies tâches RepoEval, vrai retrieval) ---")
+        prompt_results = measure_prompt_overhead(
+            n_tasks=args.n_tasks, tasks_per_repo=args.tasks_per_repo, k=args.k,
+            max_chunk_size=args.max_chunk_size, max_context_chars=args.max_context_chars,
+            tokenizer_name=args.tokenizer,
+        )
+        for strategy, stats in prompt_results.items():
+            tokens_str = f"{stats['avg_prompt_tokens']:.1f} tokens" if stats["avg_prompt_tokens"] is not None else "tokens: n/a"
+            print(
+                f"  {strategy:<12} {stats['avg_prompt_chars']:>7.1f} car./prompt | {tokens_str:>16} | "
+                f"{stats['avg_chunks_retrieved']:.2f} chunks/prompt en moyenne (n={stats['n_tasks']} tâches)"
+            )
+        all_results["_prompt_overhead"] = prompt_results
+        print("-" * 70)
 
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
