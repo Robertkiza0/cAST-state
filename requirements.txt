@@ -1,6 +1,14 @@
 astchunk
-tree-sitter
-tree-sitter-python
+# Épinglé exprès : Colab installait tree-sitter 0.26.0 (dernière version,
+# non épinglée) et le kernel plantait de façon reproductible (segfault natif,
+# pas une exception Python) pendant le chunking cast_orig/cast_scope d'un
+# gros dépôt — jamais reproduit en local avec 0.25.2/0.25.0. tree-sitter
+# 0.26.1 (peu après 0.26.0) a corrigé des choses côté bindings Python,
+# signe que 0.26.0 avait un vrai problème. On fixe sur les versions
+# testées longuement sans plantage plutôt que de laisser pip prendre la
+# dernière version disponible.
+tree-sitter==0.25.2
+tree-sitter-python==0.25.0
 rank_bm25
 
 # Préférée pour compute_es (extension compilée, plus rapide) — repli
