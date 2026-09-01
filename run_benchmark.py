@@ -55,22 +55,74 @@ def trim_code(code: str, max_chars: int = DEFAULT_MAX_UNFINISHED_CHARS) -> str:
     return code[-max_chars:] if len(code) > max_chars else code
 
 
+# Marqueurs de la section d'instruction — jamais mélangés au code (voir
+# format_chunk_block ci-dessous et le docstring de chunkers/__init__.py sur
+# le risque d'hallucination), et donc aussi les marqueurs qu'un générateur
+# pourrait être tenté d'imiter s'il continue à "écrire dans le même style"
+# après un chunk de contexte. STOP_SEQUENCES (utilisé par generation/) et
+# sanitize_generated_code() (ci-dessous) s'appuient sur ces mêmes chaînes.
+CONTEXT_INSTRUCTION_MARKER = "[CONTEXT INSTRUCTION]"
+CODE_SNIPPET_MARKER = "[CODE SNIPPET]"
+STOP_SEQUENCES = [
+    "\n" + CONTEXT_INSTRUCTION_MARKER,
+    "\n" + CODE_SNIPPET_MARKER,
+    "\nScope:",
+    "\nFile:",
+]
+
+
+def format_chunk_block(chunk: dict[str, Any]) -> str:
+    """Un bloc de contexte pour un chunk retrouvé : la métadonnée d'ancêtre
+    (`header` — état de classe / décorateurs pour cast_scope, simple
+    en-tête pour cast_orig, absente pour fixed) est ISOLÉE dans une section
+    d'instruction, jamais mélangée au code lui-même. Motivation : coller la
+    métadonnée directement dans le bloc de code (ce que fait
+    astchunk.apply_chunk_expansion() par défaut, via un faux docstring
+    ''' ... ''') risque de faire imiter ce format par le générateur — ou lui
+    faire halluciner du pseudo-code — au lieu de continuer en Python valide.
+    """
+    lines = [CONTEXT_INSTRUCTION_MARKER, f"File: {chunk['file_path']}"]
+    if chunk.get("header"):
+        lines.append(f"Scope: {chunk['header']}")
+    lines.append("")
+    lines.append(CODE_SNIPPET_MARKER)
+    lines.append(chunk["content"])
+    return "\n".join(lines)
+
+
 def build_prompt(unfinished_code: str, retrieved_chunks: list[dict[str, Any]], max_context_chars: int = 3000) -> str:
     context_parts = []
     total = 0
     for chunk in retrieved_chunks:
-        content = chunk["content"]
-        if total + len(content) > max_context_chars:
+        block = format_chunk_block(chunk)
+        if total + len(block) > max_context_chars:
             remaining = max_context_chars - total
             if remaining > 0:
-                context_parts.append(content[:remaining])
+                context_parts.append(block[:remaining])
             break
-        context_parts.append(content)
-        total += len(content)
+        context_parts.append(block)
+        total += len(block)
 
     context = "\n\n".join(context_parts)
     trimmed = trim_code(unfinished_code)
     return f"{context}\n\n{trimmed}" if context else trimmed
+
+
+def sanitize_generated_code(prediction: str) -> str:
+    """Filet de sécurité final : si le générateur imite quand même le
+    format d'instruction (malgré la séparation ci-dessus et les
+    STOP_SEQUENCES côté génération), supprime toute ligne qui ressemble à
+    une métadonnée hallucinée avant de comparer au ground truth. Une
+    complétion correcte ne contient normalement aucune de ces lignes — ce
+    n'est donc presque toujours un no-op, sauf exactement dans le cas
+    qu'on veut neutraliser."""
+    cleaned_lines = []
+    for line in prediction.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith((CONTEXT_INSTRUCTION_MARKER, CODE_SNIPPET_MARKER, "Scope:", "File:")):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
 
 
 def filter_safe_chunks_repoeval(
@@ -199,7 +251,8 @@ def run_repoeval(args, chunk_cache: RepoChunkCache, generator, results: dict, wr
 
             t0 = time.time()
             prompt = build_prompt(task["prompt"], retrieved, max_context_chars=args.max_context_chars)
-            prediction = generator.generate(prompt)
+            raw_prediction = generator.generate(prompt, stop_sequences=STOP_SEQUENCES)
+            prediction = sanitize_generated_code(raw_prediction)
             if verbose:
                 print(f"[RepoEval]   [{strategy}] generate(): {time.time()-t0:.1f}s, sortie={prediction[:60]!r}")
 
@@ -233,8 +286,8 @@ def run_cceval(args, chunk_cache: RepoChunkCache, generator, results: dict, writ
             retriever = BM25Retriever(safe_chunks)
             retrieved = retriever.retrieve(task["prompt"], k=args.k)
             prompt = build_prompt(task["prompt"], retrieved, max_context_chars=args.max_context_chars)
-            raw_prediction = generator.generate(prompt)
-            prediction = postprocess_completion(task["prompt"], raw_prediction)
+            raw_prediction = generator.generate(prompt, stop_sequences=STOP_SEQUENCES)
+            prediction = postprocess_completion(task["prompt"], sanitize_generated_code(raw_prediction))
             score(
                 metadata["ground_truth"], prediction, results["cceval"][strategy],
                 writer, "cceval", metadata["task_id"], strategy,

@@ -3,11 +3,15 @@
 The whole point of the experiment is to isolate the effect of CHUNKING: same
 retriever, same generator, only the chunker differs between conditions. BM25
 is a reasonable, dependency-light, deterministic choice (no embedding model
-to download, no GPU) — ranking is purely a function of each chunk's own text,
-so it also naturally rewards cast_scope's chunk_expansion=True headers
-(class state / decorators) if and only if that text actually helps match
-the query, without any retriever-side special-casing for one condition over
-another.
+to download, no GPU) — ranking is purely a function of each chunk's own text.
+
+Chunks carry "content" (pure code) and "header" (ancestor metadata — class
+state, decorators — kept OUT of the generation-facing text on purpose, see
+chunkers/__init__.py's module docstring for why) as separate fields. BM25
+indexes content+header TOGETHER, so cast_scope's richer header still helps
+retrieval match a query against, say, a decorator or a self.* attribute name
+it wouldn't otherwise see — only the text a downstream generator is shown
+changes, not what the retriever itself can match against.
 """
 
 import re
@@ -24,7 +28,9 @@ def tokenize(text: str) -> list[str]:
 class BM25Retriever:
     def __init__(self, chunks: list[dict]):
         self.chunks = chunks
-        self._corpus_tokens = [tokenize(chunk["content"]) for chunk in chunks]
+        self._corpus_tokens = [
+            tokenize(chunk["content"] + " " + chunk.get("header", "")) for chunk in chunks
+        ]
         self._bm25 = BM25Okapi(self._corpus_tokens) if self._corpus_tokens else None
 
     def retrieve(self, query: str, k: int = 5) -> list[dict]:

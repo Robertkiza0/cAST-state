@@ -19,15 +19,17 @@ from typing import Protocol
 
 
 class Generator(Protocol):
-    def generate(self, prompt: str) -> str: ...
+    def generate(self, prompt: str, stop_sequences: list[str] | None = None) -> str: ...
 
 
 class StubGenerator:
     """Deterministic dry-run stand-in: echoes back the prompt's own last
     non-empty line. Exercises EM/ES/Pass@1 with realistically-shaped
-    (sometimes matching, mostly not) output, with zero model cost."""
+    (sometimes matching, mostly not) output, with zero model cost.
+    stop_sequences is accepted for interface compatibility with HFGenerator
+    but unused — there's no real generation here to stop early."""
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, stop_sequences: list[str] | None = None) -> str:
         lines = [line for line in prompt.splitlines() if line.strip()]
         return lines[-1] if lines else ""
 
@@ -64,17 +66,25 @@ class HFGenerator:
         self.model.eval()
         self.max_new_tokens = max_new_tokens
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, stop_sequences: list[str] | None = None) -> str:
         import torch
 
         inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(self.model.device)
+        generate_kwargs = dict(
+            max_new_tokens=self.max_new_tokens,
+            do_sample=False,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+        if stop_sequences:
+            # Blocks the model from continuing past a hallucinated
+            # "[CONTEXT INSTRUCTION]"/"Scope:"/etc. line if it ever starts
+            # imitating our prompt's own instruction format instead of
+            # writing real code (see run_benchmark.py's format_chunk_block
+            # docstring) — stop_strings needs transformers>=4.38.
+            generate_kwargs["stop_strings"] = stop_sequences
+            generate_kwargs["tokenizer"] = self.tokenizer
         with torch.no_grad():
-            output = self.model.generate(
-                **inputs,
-                max_new_tokens=self.max_new_tokens,
-                do_sample=False,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
+            output = self.model.generate(**inputs, **generate_kwargs)
         return self.tokenizer.decode(output[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
 
 

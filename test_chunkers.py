@@ -32,7 +32,7 @@ class TestChunkFileUnifiedInterface(unittest.TestCase):
             chunks = chunk_file("x.py", CODE, strategy, max_chunk_size=100)
             self.assertGreater(len(chunks), 0, strategy)
             for chunk in chunks:
-                self.assertEqual(set(chunk.keys()), {"content", "file_path", "start_line", "end_line"})
+                self.assertEqual(set(chunk.keys()), {"content", "header", "file_path", "start_line", "end_line"})
                 self.assertEqual(chunk["file_path"], "x.py")
                 self.assertLessEqual(chunk["start_line"], chunk["end_line"])
 
@@ -50,9 +50,13 @@ class TestChunkFileUnifiedInterface(unittest.TestCase):
         orig_chunks = chunk_file("x.py", CODE, "cast_orig", max_chunk_size=100)
         scope_chunks = chunk_file("x.py", CODE, "cast_scope", max_chunk_size=100)
         # le dernier chunk (imbriqué dans run(), sous DataProcessor) doit porter
-        # l'annotation d'état seulement côté cast_scope
+        # l'annotation d'état seulement côté cast_scope — dans "header", jamais
+        # mélangée à "content" (voir chunkers/__init__.py: risque d'hallucination
+        # si la métadonnée est collée directement dans le texte du code).
+        self.assertNotIn("State:", orig_chunks[-1]["header"])
+        self.assertIn("(State: self.config)", scope_chunks[-1]["header"])
         self.assertNotIn("State:", orig_chunks[-1]["content"])
-        self.assertIn("(State: self.config)", scope_chunks[-1]["content"])
+        self.assertNotIn("State:", scope_chunks[-1]["content"])
 
     def test_fixed_strategy_reconstructs_source_across_chunks(self):
         chunks = chunk_file("x.py", CODE, "fixed", max_chunk_size=50)

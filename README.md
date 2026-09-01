@@ -42,6 +42,14 @@ fonction englobante, sans dégrader la vitesse de chunking.
   vendorisées localement, vrais dépôts clonés à la demande).
 - **`run_benchmark.py`** — orchestre tout : compare les 3 baselines sur
   RepoEval et/ou CrossCodeEval avec le même retriever et le même générateur (RQ2).
+  Le prompt sépare TOUJOURS métadonnée (`[CONTEXT INSTRUCTION]`, en-tête
+  d'ancêtre) et code (`[CODE SNIPPET]`) — jamais mélangés dans le même bloc
+  de texte comme le fait `astchunk.apply_chunk_expansion()` par défaut (un
+  faux docstring `'''...'''` au début du chunk), pour éviter que le
+  générateur imite ce format ou hallucine du pseudo-code. Complété par des
+  séquences d'arrêt (`STOP_SEQUENCES`) côté génération et un nettoyage de
+  secours (`sanitize_generated_code()`) côté post-traitement — voir
+  `test_prompt_safety.py`.
 - **`experiments/rq3_robustness_report.py`** — RQ3 : troncature de vrais
   fichiers à plusieurs points (25/50/75/90%, simule un curseur en cours de
   frappe), mesure le taux de crash cast_orig vs cast_scope et la capacité
