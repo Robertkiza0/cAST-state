@@ -17,8 +17,11 @@ rank_bm25
 editdistance; python_version < "3.13" or platform_system != "Windows"
 
 # Optionnel : nécessaire pour --generator hf (run réel StarCoder2-7B/CodeLlama-7B
-# sur GPU) ET pour --retriever codesage/agentic (embeddings CodeSage) —
-# pas nécessaire pour --generator stub + --retriever bm25 (défauts).
+# sur GPU) ET pour --retriever codesage/agentic (embeddings CodeSage, via
+# sentence-transformers plutôt qu'AutoModel brut — voir
+# retrieval/codesage_retriever.py sur pourquoi) — pas nécessaire pour
+# --generator stub + --retriever bm25 (défauts).
 # torch
 # transformers
 # accelerate
+# sentence-transformers
