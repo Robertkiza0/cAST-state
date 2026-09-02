@@ -15,6 +15,27 @@ model to load at all.
 import numpy as np
 
 
+def _patch_conv1d_compat() -> None:
+    """CodeSage's custom modeling code (loaded via trust_remote_code=True,
+    pinned to whatever revision the Hub serves) does
+    `from transformers.modeling_utils import Conv1D` — valid in the
+    transformers version that code was written against, but recent
+    transformers releases moved Conv1D to transformers.pytorch_utils and
+    modeling_utils no longer re-exports it at all, so that import fails
+    outright (ImportError, not something try/except around model loading
+    can route around, since it happens inside the remote module's own
+    top-level import statements). Re-exposing the class under its old
+    location before loading the model is the standard workaround for a
+    remote-code repo written against an older transformers API — this
+    doesn't change any behavior, Conv1D itself is unchanged, only where
+    it's importable from."""
+    import transformers.modeling_utils as modeling_utils
+
+    if not hasattr(modeling_utils, "Conv1D"):
+        from transformers.pytorch_utils import Conv1D
+        modeling_utils.Conv1D = Conv1D
+
+
 class CodeSageRetriever:
     # Cached at class level (tokenizer + model), keyed by model_name: this
     # class gets instantiated fresh per (repo, task) in run_benchmark.py's
@@ -27,6 +48,7 @@ class CodeSageRetriever:
         from transformers import AutoModel, AutoTokenizer
 
         if model_name not in CodeSageRetriever._cache:
+            _patch_conv1d_compat()
             tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
             model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
             model.eval()
