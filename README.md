@@ -28,8 +28,16 @@ fonction englobante, sans dégrader la vitesse de chunking.
 - **`chunkers/`** — point d'entrée unifié `chunk_file(path, code, strategy, max_chunk_size)`
   pour les 3 baselines (`fixed`, `cast_orig`, `cast_scope`), même format de
   sortie quelle que soit la stratégie.
-- **`retrieval/`** — `BM25Retriever`, partagé par les 3 baselines (seul le
-  chunking varie entre les conditions).
+- **`retrieval/`** — 3 retrievers enfichables (`--retriever`), partagés par
+  les 3 baselines de chunking (seul le chunking varie entre les conditions) :
+  `bm25` (défaut, aucune dépendance GPU — mais départ assumé du papier cAST,
+  qui utilise des retrievers denses, voir `cast_scope_paper_methodology_notes`
+  en mémoire), `codesage` (dense, `codesage/codesage-small-v2` — un des 3
+  retrievers réels du papier cAST, besoin de torch+GPU), `agentic`
+  (reranking en 2 étapes sur le Top-K dense CodeSage, par correspondance
+  entre les `self.*` mentionnés près du curseur et l'en-tête `header` du
+  chunk — voir `test_agentic_reranker.py` pour la logique de reranking
+  testée indépendamment de CodeSage).
 - **`generation/`** — générateur enfichable : `HFGenerator` (vrai modèle
   HuggingFace, StarCoder2-7B/CodeLlama-7B — nécessite torch+GPU, à lancer sur
   Colab) ou `StubGenerator` (factice, déterministe, pour valider tout le
@@ -72,11 +80,14 @@ pip install -r requirements.txt
 python -m unittest discover -p "test_*.py"
 ```
 
-48 tests couvrent : l'annotation scope-aware (état de classe, décorateurs,
-non-régression, performance amortie < 1 ms/chunk), le chunker fixe, le
-retriever BM25, les métriques, la cohérence de l'interface unifiée entre
-les 3 stratégies (`cast_orig`/`cast_scope` doivent avoir le MÊME fenêtrage,
-seul le texte d'en-tête diffère), et la robustesse face au code
+92 tests couvrent : l'annotation scope-aware (état de classe, décorateurs,
+non-régression, performance amortie < 1 ms/chunk), le chunker fixe, les
+retrievers (BM25 + la logique de reranking agentique, isolée d'un vrai
+modèle d'embedding via un double factice), les métriques, la séparation
+prompt/métadonnée anti-hallucination, l'adaptateur CrossCodeEval, le test
+de significativité McNemar, la cohérence de l'interface unifiée entre les
+3 stratégies de chunking (`cast_orig`/`cast_scope` doivent avoir le MÊME
+fenêtrage, seul le texte d'en-tête diffère), et la robustesse face au code
 incomplet/erroné (RQ3).
 
 ## Lancer les expériences RQ3/RQ4 (locales, pas besoin de GPU)

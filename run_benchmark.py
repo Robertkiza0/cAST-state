@@ -1,6 +1,7 @@
 """Compare 3 chunking baselines (fixed-size, cAST officiel, cAST-Scope) sur
-RepoEval et/ou CrossCodeEval, avec le MÊME retriever (BM25) et le MÊME
-générateur pour les 3, afin d'isoler l'effet du chunking seul.
+RepoEval et/ou CrossCodeEval, avec le MÊME retriever (--retriever, un parmi
+bm25/codesage/agentic — voir retrieval/) et le MÊME générateur pour les 3,
+afin d'isoler l'effet du chunking seul.
 
 Baselines :
     fixed      - Fenêtre fixe de texte (max_chunk_size caractères), aucune
@@ -39,7 +40,7 @@ from crosscodeeval_adapter import filter_safe_chunks_cceval, postprocess_complet
 from datasets_io import ensure_repo_cloned, load_cceval_tasks_sample, load_repoeval_tasks
 from generation import get_generator
 from metrics import compute_em, compute_es, compute_pass_at_1
-from retrieval import BM25Retriever
+from retrieval import RETRIEVERS, get_retriever
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
@@ -244,7 +245,7 @@ def run_repoeval(args, chunk_cache: RepoChunkCache, generator, results: dict, wr
             safe_chunks = filter_safe_chunks_repoeval(
                 chunks, repo_dir, metadata["fpath_tuple"], metadata["context_start_lineno"]
             )
-            retriever = BM25Retriever(safe_chunks)
+            retriever = get_retriever(args.retriever, safe_chunks)
             retrieved = retriever.retrieve(task["prompt"], k=args.k)
             if verbose:
                 print(f"[RepoEval]   [{strategy}] retrieval: {len(retrieved)} chunks en {time.time()-t0:.1f}s")
@@ -283,7 +284,7 @@ def run_cceval(args, chunk_cache: RepoChunkCache, generator, results: dict, writ
         for strategy in STRATEGIES:
             chunks = chunk_cache.get(repo_dir, strategy)
             safe_chunks = filter_safe_chunks_cceval(chunks, repo_dir, metadata["fpath_tuple"])
-            retriever = BM25Retriever(safe_chunks)
+            retriever = get_retriever(args.retriever, safe_chunks)
             retrieved = retriever.retrieve(task["prompt"], k=args.k)
             prompt = build_prompt(task["prompt"], retrieved, max_context_chars=args.max_context_chars)
             raw_prediction = generator.generate(prompt, stop_sequences=STOP_SEQUENCES)
@@ -337,6 +338,10 @@ def parse_args():
     parser.add_argument("--tasks-per-repo", type=int, default=10, help="RepoEval uniquement")
     parser.add_argument("--max-chunk-size", type=int, default=2000, help="Caractères non-blancs (identique aux 3 baselines)")
     parser.add_argument("--k", type=int, default=5, help="Nombre de chunks retrouvés par tâche")
+    parser.add_argument(
+        "--retriever", choices=list(RETRIEVERS), default="bm25",
+        help="bm25 (défaut, aucune dépendance GPU) | codesage (dense, besoin de torch) | agentic (reranking sur candidats CodeSage)",
+    )
     parser.add_argument("--max-context-chars", type=int, default=3000)
     parser.add_argument("--generator", choices=["stub", "hf", "hf_api"], default="stub")
     parser.add_argument("--model-name", default=None, help="Requis si --generator hf/hf_api, ex: bigcode/starcoder2-7b")

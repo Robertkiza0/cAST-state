@@ -16,8 +16,9 @@ rank_bm25
 # (voir metrics.py), ex. pas de wheel dispo pour Python 3.13/Windows ici.
 editdistance; python_version < "3.13" or platform_system != "Windows"
 
-# Optionnel, uniquement pour --generator hf (run réel StarCoder2-7B/CodeLlama-7B
-# sur une machine GPU, ex. Colab) — pas nécessaire pour --generator stub.
+# Optionnel : nécessaire pour --generator hf (run réel StarCoder2-7B/CodeLlama-7B
+# sur GPU) ET pour --retriever codesage/agentic (embeddings CodeSage) —
+# pas nécessaire pour --generator stub + --retriever bm25 (défauts).
 # torch
 # transformers
 # accelerate
